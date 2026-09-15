@@ -1,0 +1,10 @@
+# 系統與編輯器暫存
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak
+*~
+
+# 快取或日誌檔
+*cache*.json
+*.log

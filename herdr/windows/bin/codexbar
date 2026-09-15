@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:/Users/cyc76/AppData/Roaming/herdr/scripts/herdr-quota.ps1" "$@"

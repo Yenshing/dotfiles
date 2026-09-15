@@ -1,0 +1,81 @@
+onboarding = false
+# herdr config aligned to ~/.tmux.conf
+# Adapted for Windows / WezTerm with CodexBar Quota Integration
+
+[theme]
+name = "gruvbox"
+auto_switch = false
+
+[terminal]
+default_shell = "C:/Program Files/Git/bin/bash.exe"
+shell_mode = "auto"
+
+[keys]
+prefix = "ctrl+a"
+
+detach = "prefix+d"          # tmux default prefix+d
+new_tab = "prefix+c"         # tmux: bind-key c new-window
+new_workspace = "prefix+shift+c"
+close_tab = ["prefix+ampersand", "prefix+ctrl+d"] # tmux: bind-key & kill-window
+close_pane = "prefix+x"      # tmux: bind-key x kill-pane
+close_workspace = "prefix+shift+d"
+
+split_vertical = "prefix+|"     # tmux: bind-key | split-window -h (side-by-side)
+split_horizontal = "prefix+minus" # tmux: bind-key - split-window -v (top/bottom)
+
+last_pane = "alt+q"
+
+zoom = "prefix+z"
+rename_tab = ["prefix+shift+t", "prefix+f2"]         # tmux: bind-key -n F2 rename-window
+rename_workspace = ["prefix+shift+w", "prefix+shift+f2"] # tmux: bind-key -n S-F2 rename-session
+
+previous_workspace = "prefix+shift+left"
+next_workspace = "prefix+shift+right"
+
+previous_agent = "prefix+shift+up"
+next_agent = "prefix+shift+down"
+
+reload_config = ["prefix+shift+r", "prefix+f5"]  # tmux: bind-key -n F5 / bind-key R source-file
+
+new_worktree = "prefix+alt+c"
+open_worktree = "prefix+alt+o"
+remove_worktree = "prefix+alt+d"  # opens confirmation
+
+toggle_sidebar = ["prefix+b", "ctrl+alt+1"]
+
+[[keys.command]]
+key = "prefix+q"
+type = "popup"
+command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:/Users/cyc76/AppData/Roaming/herdr/scripts/herdr-quota.ps1\" -Dashboard"
+description = "Open CodexBar AI Quota Dashboard"
+width = "85%"
+height = "80%"
+
+[ui]
+host_cursor = "native"
+mouse_capture = true   # tmux: setw -g mouse on
+prompt_new_tab_name = false  # create tabs immediately with generated names, rename later if needed
+confirm_close = false  # no confirmation prompt when closing a workspace
+
+[ui.sidebar.agents]
+row_gap = 0
+rows = [["state_icon", "machine", "workspace", "tab"], ["agent"], ["$quota"]]
+
+[[ui.tab_bar_right]]
+type = "command"
+command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:/Users/cyc76/AppData/Roaming/herdr/scripts/herdr-quota.ps1\" -StatusBar"
+interval_seconds = 60
+timeout_seconds = 5
+
+[ui.toast.clipboard]
+enabled = false
+
+[ui.sound]
+enabled = true
+
+[advanced]
+scrollback_limit_bytes = 52428800  # tmux: set -g history-limit 50000
+
+[experimental]
+kitty_graphics = true
+reveal_hidden_cursor_for_cjk_ime = true

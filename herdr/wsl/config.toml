@@ -1,0 +1,64 @@
+onboarding = false
+
+[theme]
+name = "gruvbox"
+auto_switch = false
+
+[keys]
+prefix = "ctrl+a"
+detach = "prefix+d"
+new_tab = "prefix+c"
+new_workspace = "prefix+shift+c"
+close_tab = ["prefix+ampersand", "prefix+ctrl+d"]
+close_pane = "prefix+x"
+close_workspace = "prefix+shift+d"
+split_vertical = "prefix+|"
+split_horizontal = "prefix+minus"
+last_pane = "alt+q"
+zoom = "prefix+z"
+rename_tab = ["prefix+shift+t", "prefix+f2"]
+rename_workspace = ["prefix+shift+w", "prefix+shift+f2"]
+previous_workspace = "prefix+shift+left"
+next_workspace = "prefix+shift+right"
+previous_agent = "prefix+shift+up"
+next_agent = "prefix+shift+down"
+reload_config = ["prefix+shift+r", "prefix+f5"]
+new_worktree = "prefix+alt+c"
+open_worktree = "prefix+alt+o"
+remove_worktree = "prefix+alt+d"
+toggle_sidebar = ["prefix+b", "ctrl+alt+1"]
+
+[[keys.command]]
+key = "prefix+q"
+type = "popup"
+command = "/home/james/.local/bin/codexbar dash"
+description = "Open CodexBar AI Quota Dashboard"
+width = "85%"
+height = "80%"
+
+[ui]
+mouse_capture = true
+prompt_new_tab_name = false
+confirm_close = false
+
+[ui.sidebar.agents]
+row_gap = 0
+rows = [["state_icon", "machine", "workspace", "tab"], ["agent"], ["$quota"]]
+
+[[ui.tab_bar_right]]
+type = "command"
+command = "/home/james/.local/bin/codexbar status"
+interval_seconds = 60
+timeout_seconds = 10
+
+[ui.toast.clipboard]
+enabled = false
+
+[ui.sound]
+enabled = true
+
+[advanced]
+scrollback_limit_bytes = 52428800
+
+[experimental]
+kitty_graphics = true
