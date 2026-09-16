@@ -70,4 +70,23 @@ if ($userPath -notlike "*$binDir*") {
     Write-Host "[OK] Added $binDir to User PATH environment variable." -ForegroundColor Yellow
 }
 
+# 5. Restore Git Bash and PowerShell shell integration configs
+$bashrcSrc = Join-Path $ScriptDir "windows\.bashrc"
+$bashrcDst = Join-Path $HOME ".bashrc"
+if (Test-Path $bashrcSrc) {
+    Copy-Item -Path $bashrcSrc -Destination $bashrcDst -Force
+    Write-Host "[OK] Git Bash ~/.bashrc restored with Herdr Live CWD integration." -ForegroundColor Green
+}
+
+$psProfileSrc = Join-Path $ScriptDir "windows\Microsoft.PowerShell_profile.ps1"
+$psProfileDir = Join-Path ([Environment]::GetFolderPath('MyDocuments')) "WindowsPowerShell"
+if (Test-Path $psProfileSrc) {
+    if (-not (Test-Path $psProfileDir)) {
+        New-Item -ItemType Directory -Path $psProfileDir -Force | Out-Null
+    }
+    $psProfileDst = Join-Path $psProfileDir "Microsoft.PowerShell_profile.ps1"
+    Copy-Item -Path $psProfileSrc -Destination $psProfileDst -Force
+    Write-Host "[OK] PowerShell profile restored with Herdr Live CWD integration." -ForegroundColor Green
+}
+
 Write-Host "`n==> Windows settings restored successfully! Restart WezTerm to apply." -ForegroundColor Cyan

@@ -36,6 +36,24 @@ description = "Open CodexBar AI Quota Dashboard"
 width = "85%"
 height = "80%"
 
+[[keys.command]]
+key = "prefix+alt+e"
+type = "plugin_action"
+command = "chmarax.herdr-nvim.toggle"
+description = "nvim sidebar"
+
+[[keys.command]]
+key = "prefix+alt+0"
+type = "pane"
+command = "lazygit status"
+description = "lazygit status"
+
+[[keys.command]]
+key = "prefix+alt+9"
+type = "pane"
+command = "lazygit log -sm full"
+description = "lazygit log"
+
 [ui]
 mouse_capture = true
 prompt_new_tab_name = false

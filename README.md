@@ -27,6 +27,9 @@ IT-Settings/
 │       ├── config.toml       # WSL Herdr 設定 (tmux 鍵位、右側配額列、prefix+q)
 │       └── scripts/
 │           └── herdr-quota.py # WSL 端 CodexBar (監控 Claude 與 Agy)
+├── windows/
+│   ├── .bashrc               # Git Bash 設定 (含 Herdr Live CWD 自動更新 workspace 與 PATH)
+│   └── Microsoft.PowerShell_profile.ps1 # PowerShell 設定 (含 Herdr Live CWD 自動更新)
 └── wsl/
     ├── .zshrc                # WSL Zsh 設定 (Oh My Zsh, 外掛配置, PATH)
     ├── .zshenv               # WSL Zsh 環境變數設定 (~/.local/bin PATH)
@@ -71,6 +74,7 @@ powershell -ExecutionPolicy Bypass -File .\restore-windows.ps1
 > * `~/.wezterm.lua`：啟動時預設自動開啟 `Windows Herdr` 與 `WSL Herdr` 雙分頁、視窗自適應記憶。
 > * `~/AppData/Roaming/herdr/`：Herdr 鍵位與 `herdr-quota.ps1` 監控腳本。
 > * `~/bin/codexbar*`：全域 `codexbar` CLI 指令，並自動加入使用者環境變數 PATH。
+> * `~/.bashrc` 與 PowerShell Profile：注入 Herdr Live CWD (OSC 9;9) 整合，讓 `cd` 到包含 `.git` 的資料夾時自動辨識並即時更新 workspace。
 
 ---
 
