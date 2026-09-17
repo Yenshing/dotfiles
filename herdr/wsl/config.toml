@@ -61,7 +61,7 @@ confirm_close = false
 
 [ui.sidebar.agents]
 row_gap = 0
-rows = [["state_icon", "machine", "workspace", "tab"], ["agent"], ["$quota"]]
+rows = [["state_icon", "machine", "workspace", "tab"], ["agent"], ["$quota", "$context"]]
 
 [[ui.tab_bar_right]]
 type = "command"

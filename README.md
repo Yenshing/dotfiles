@@ -131,7 +131,7 @@ bash ./restore-wsl.sh
 | 快速鍵 | 功能 |
 | :--- | :--- |
 | <kbd>Ctrl+a</kbd> 後按 <kbd>q</kbd> | **開啟 CodexBar AI Quota 全螢幕彩色儀表板** |
-| <kbd>Ctrl+a</kbd> 後按 <kbd>b</kbd> | 展開 / 收合 Agent 側邊欄（顯示即時 `$quota`） |
+| <kbd>Ctrl+a</kbd> 後按 <kbd>b</kbd> | 展開 / 收合 Agent 側邊欄（顯示即時 `$quota` 與 `$context`） |
 | <kbd>Ctrl+a</kbd> 後按 <kbd>c</kbd> | 在當前工作區開新 Tab |
 | <kbd>Ctrl+a</kbd> 後按 <kbd>&#124;</kbd> | 垂直分割 Pane |
 | <kbd>Ctrl+a</kbd> 後按 <kbd>-</kbd> | 水平分割 Pane |
@@ -141,10 +141,11 @@ bash ./restore-wsl.sh
 ### CodexBar CLI 查詢指令
 | 終端機指令 | 說明 |
 | :--- | :--- |
-| `codexbar` | 查看當前環境的所有 AI Agent 用量概覽 |
-| `codexbar agy` | 僅查看 Antigravity (Gemini / Claude / GPT) 用量 |
-| `codexbar claude` | 僅查看 Anthropic Claude 用量（WSL 端） |
-| `codexbar codex` | 僅查看 OpenAI Codex 用量（Windows 端） |
-| `codexbar dash` | 終端內開啟互動式 ASCII 彩色儀表板 |
-| `codexbar status` | 輸出單行狀態字串並更新 Herdr Pane Metadata |
+| `codexbar` | 查看當前環境的所有 AI Agent 用量與目前 Session Context |
+| `codexbar context` (`ctx`) | 查看當前各 Agent Session 的 Context Window 與 Token 消耗量 |
+| `codexbar agy` | 僅查看 Antigravity (Gemini / Claude / GPT) 用量與 Context |
+| `codexbar claude` | 僅查看 Anthropic Claude 用量與 Context（WSL 端） |
+| `codexbar codex` | 僅查看 OpenAI Codex 用量與 Context（Windows 端） |
+| `codexbar dash` | 終端內開啟互動式 ASCII 彩色儀表板（含 Quota、Context 與 Pane 狀態） |
+| `codexbar status` | 輸出單行狀態字串（含聚焦 Agent Context）並更新 Herdr Pane Metadata |
 | `codexbar refresh` | 略過快取直接向 API 重新擷取最新數據 |

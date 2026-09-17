@@ -12,6 +12,7 @@ param(
 
     [switch]$StatusBar,
     [switch]$Dashboard,
+    [switch]$Context,
     [switch]$Json,
     [switch]$UpdatePanes,
     [switch]$Refresh,
@@ -25,6 +26,7 @@ if ($Target) {
     switch -Regex ($Target) {
         '^(status|status-?bar)$'  { $StatusBar = $true }
         '^(dash|dashboard)$'      { $Dashboard = $true }
+        '^(context|ctx)$'         { $Context = $true }
         '^(json)$'                { $Json = $true }
         '^(update|update-?panes)$'{ $UpdatePanes = $true }
         '^(refresh|reload)$'      { $Refresh = $true }
@@ -77,6 +79,141 @@ function Get-BucketVal($groupObj, [string]$bucketName) {
     } else {
         return $b."$bucketName"
     }
+}
+
+function Get-AgentContext([string]$agentName, [string]$sessionId = "") {
+    $agent = [string]$agentName.ToLower()
+
+    # 1. Google Antigravity (agy)
+    if ($agent -in @("agy", "antigravity", "gemini")) {
+        $brainBase = "$HOME\.gemini\antigravity-cli\brain"
+        $targetLog = $null
+
+        if ($sessionId -and (Test-Path "$brainBase\$sessionId")) {
+            $fullPath = "$brainBase\$sessionId\.system_generated\logs\transcript_full.jsonl"
+            $compactPath = "$brainBase\$sessionId\.system_generated\logs\transcript.jsonl"
+            if (Test-Path $fullPath) { $targetLog = $fullPath }
+            elseif (Test-Path $compactPath) { $targetLog = $compactPath }
+        }
+
+        if (-not $targetLog -and (Test-Path $brainBase)) {
+            $latestDir = Get-ChildItem -Path $brainBase -Directory -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if ($latestDir) {
+                $fullPath = "$($latestDir.FullName)\.system_generated\logs\transcript_full.jsonl"
+                $compactPath = "$($latestDir.FullName)\.system_generated\logs\transcript.jsonl"
+                if (Test-Path $fullPath) { $targetLog = $fullPath }
+                elseif (Test-Path $compactPath) { $targetLog = $compactPath }
+            }
+        }
+
+        if ($targetLog -and (Test-Path $targetLog)) {
+            try {
+                $bytes = (Get-Item $targetLog).Length
+                $estTokens = [math]::Round($bytes / 3.8)
+                $tokStr = if ($estTokens -ge 1000000) {
+                    "$([math]::Round($estTokens / 1000000, 1))M"
+                } elseif ($estTokens -ge 1000) {
+                    "$([math]::Round($estTokens / 1000))k"
+                } else {
+                    "$estTokens"
+                }
+                $sizeStr = if ($bytes -ge 1048576) {
+                    "$([math]::Round($bytes / 1048576, 1))MB"
+                } else {
+                    "$([math]::Round($bytes / 1024))KB"
+                }
+                return [ordered]@{
+                    agent = "agy"
+                    tokens_str = "~$tokStr"
+                    size_str = $sizeStr
+                    display = "ctx: ~$tokStr"
+                    detailed = "~$tokStr tokens ($sizeStr)"
+                    raw_tokens = $estTokens
+                    raw_bytes = $bytes
+                }
+            } catch {}
+        }
+    }
+
+    # 2. OpenAI Codex
+    if ($agent -in @("codex", "openai")) {
+        $codexSessionsDir = "$HOME\.codex\sessions"
+        $targetFile = $null
+
+        if ($sessionId -and (Test-Path $codexSessionsDir)) {
+            $found = Get-ChildItem -Path $codexSessionsDir -Filter "*$sessionId*.jsonl" -Recurse -File -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            if ($found) { $targetFile = $found.FullName }
+        }
+
+        if (-not $targetFile -and (Test-Path $codexSessionsDir)) {
+            $latest = Get-ChildItem -Path $codexSessionsDir -Filter "rollout-*.jsonl" -Recurse -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if ($latest) { $targetFile = $latest.FullName }
+        }
+
+        if ($targetFile -and (Test-Path $targetFile)) {
+            try {
+                $tailLines = Get-Content $targetFile -Tail 30 -ErrorAction SilentlyContinue
+                if ($tailLines) {
+                    for ($i = $tailLines.Count - 1; $i -ge 0; $i--) {
+                        $line = $tailLines[$i]
+                        if ($line -match '"type":"token_count"' -or ($line -match '"token_count"' -and $line -match '"model_context_window"')) {
+                            $parsed = $line | ConvertFrom-Json
+                            $info = $parsed.payload.info
+                            if ($info -and $info.model_context_window) {
+                                $maxTok = [long]$info.model_context_window
+                                $inTok = if ($info.last_token_usage -and $info.last_token_usage.input_tokens) {
+                                    [long]$info.last_token_usage.input_tokens
+                                } elseif ($info.last_token_usage -and $info.last_token_usage.total_tokens) {
+                                    [long]$info.last_token_usage.total_tokens
+                                } else { 0 }
+
+                                $pct = [math]::Round(($inTok / $maxTok) * 100)
+                                $tokStr = if ($inTok -ge 1000) { "$([math]::Round($inTok / 1000))k" } else { "$inTok" }
+                                $maxStr = if ($maxTok -ge 1000) { "$([math]::Round($maxTok / 1000))k" } else { "$maxTok" }
+
+                                return [ordered]@{
+                                    agent = "codex"
+                                    tokens_str = $tokStr
+                                    max_str = $maxStr
+                                    pct = $pct
+                                    display = "ctx: $tokStr ($pct%)"
+                                    detailed = "$tokStr / $maxStr tokens ($pct%)"
+                                    raw_tokens = $inTok
+                                    max_tokens = $maxTok
+                                }
+                            }
+                        }
+                    }
+                }
+
+                $bytes = (Get-Item $targetFile).Length
+                $estTokens = [math]::Round($bytes / 3.8)
+                $tokStr = if ($estTokens -ge 1000) { "$([math]::Round($estTokens / 1000))k" } else { "$estTokens" }
+                return [ordered]@{
+                    agent = "codex"
+                    tokens_str = "~$tokStr"
+                    display = "ctx: ~$tokStr"
+                    detailed = "~$tokStr tokens"
+                    raw_tokens = $estTokens
+                }
+            } catch {}
+        }
+    }
+
+    return $null
+}
+
+function Get-PaneContext($pane) {
+    if (-not $pane) { return $null }
+    $agent = [string]$pane.agent
+    $sessId = ""
+    if ($pane.agent_session -and $pane.agent_session.value) {
+        $sessId = [string]$pane.agent_session.value
+    }
+    return Get-AgentContext $agent $sessId
 }
 
 function Get-CodexQuota {
@@ -330,17 +467,20 @@ function Update-HerdrPanes($quotas) {
         $tp5hB = Get-BucketVal $agy.third_party "5h"
 
         foreach ($pane in $panes) {
+            $ctx = Get-PaneContext $pane
+            $ctxArgs = if ($ctx -and $ctx.display) { @("--token", "context=$($ctx.display)") } else { @() }
+
             if ($pane.agent -eq "codex") {
                 if (-not $codex.Error) {
                     $cReset = if ($codex.primary.reset_text) { " ($($codex.primary.reset_text))" } else { "" }
                     $val = "5h $($codex.primary.remaining)%$cReset"
-                    & $herdrPath pane report-metadata $pane.pane_id --source codexbar --token "quota=$val" 2>$null
+                    & $herdrPath pane report-metadata $pane.pane_id --source codexbar --token "quota=$val" @ctxArgs 2>$null
                 }
             } elseif ($pane.agent -eq "agy") {
                 if (-not $agy.Error -and $g5hB) {
                     $gRes = if ($g5hB.reset_text) { " ($($g5hB.reset_text))" } else { "" }
                     $val = "5h $($g5hB.remaining)%$gRes"
-                    & $herdrPath pane report-metadata $pane.pane_id --source codexbar --token "quota=$val" 2>$null
+                    & $herdrPath pane report-metadata $pane.pane_id --source codexbar --token "quota=$val" @ctxArgs 2>$null
                 }
             } else {
                 # General shell panes: show 5h summaries
@@ -355,14 +495,15 @@ function Update-HerdrPanes($quotas) {
 
 # --- HELP DISPLAY ---
 if ($Help) {
-    Write-Host "CodexBar for Herdr - Multi-Agent AI Quota Monitor"
+    Write-Host "CodexBar for Herdr - Multi-Agent AI Quota & Context Monitor"
     Write-Host ""
     Write-Host "Usage:"
     Write-Host "  codexbar                 Display current usage for both Agy and Codex"
     Write-Host "  codexbar agy             Display only Antigravity (Gemini / Claude / GPT) usage"
     Write-Host "  codexbar codex           Display only OpenAI Codex usage"
-    Write-Host "  codexbar dash            Open the full interactive ASCII dashboard (includes 7d & 3p)"
-    Write-Host "  codexbar status          Print single-line 5h status for Herdr tab bar"
+    Write-Host "  codexbar context (ctx)   Display current session context / token usage"
+    Write-Host "  codexbar dash            Open the full interactive ASCII dashboard (includes 7d, 3p, ctx)"
+    Write-Host "  codexbar status          Print single-line 5h & context status for Herdr tab bar"
     Write-Host "  codexbar update          Update Herdr sidebar metadata for all agent panes"
     Write-Host "  codexbar refresh         Force refresh cache from APIs and print"
     Write-Host "  codexbar json            Output raw quota data as JSON"
@@ -386,23 +527,27 @@ if ($Json) {
 
 if ($UpdatePanes) {
     Update-HerdrPanes $quotas
-    Write-Output "Herdr panes metadata updated with 5h quota."
+    Write-Output "Herdr panes metadata updated with 5h quota and context."
     exit 0
 }
 
 if ($StatusBar) {
     Update-HerdrPanes $quotas
 
-    # Check focused pane to give context-aware status (5h ONLY)
+    # Check focused pane to give context-aware status (5h + context)
     $herdrPath = (Get-Command herdr.exe -ErrorAction SilentlyContinue).Source
     $focusedAgent = ""
+    $focusedPane = $null
     if ($herdrPath) {
         $panesJson = & $herdrPath pane list 2>$null
         if ($panesJson) {
             try {
                 $panesObj = $panesJson | ConvertFrom-Json
                 $focused = $panesObj.result.panes | Where-Object { $_.focused -eq $true } | Select-Object -First 1
-                if ($focused) { $focusedAgent = $focused.agent }
+                if ($focused) {
+                    $focusedAgent = $focused.agent
+                    $focusedPane = $focused
+                }
             } catch {}
         }
     }
@@ -413,10 +558,13 @@ if ($StatusBar) {
     $g5h = if ($g5hB) { "$($g5hB.remaining)%" } else { "N/A" }
     $gReset = if ($g5hB -and $g5hB.reset_text) { " ($($g5hB.reset_text))" } else { "" }
 
+    $ctx = if ($focusedPane) { Get-PaneContext $focusedPane } else { $null }
+    $ctxPart = if ($ctx -and $ctx.display) { " | $($ctx.display)" } else { "" }
+
     if ($focusedAgent -eq "agy") {
-        Write-Output "Agy 5h: $g5h$gReset  (Codex 5h: $c5h)"
+        Write-Output "Agy 5h: $g5h$gReset$ctxPart  (Codex 5h: $c5h)"
     } elseif ($focusedAgent -eq "codex") {
-        Write-Output "Codex 5h: $c5h$cReset  (Agy 5h: $g5h)"
+        Write-Output "Codex 5h: $c5h$cReset$ctxPart  (Agy 5h: $g5h)"
     } else {
         Write-Output "Agy 5h: $g5h  |  Codex 5h: $c5h"
     }
@@ -455,6 +603,12 @@ if ($Dashboard) {
         $gColor = if ($g5h -ge 50) { $green } elseif ($g5h -ge 20) { $yellow } else { $red }
         $tpColor = if ($tp5h -ge 50) { $green } elseif ($tp5h -ge 20) { $yellow } else { $red }
 
+        $agyCtx = Get-AgentContext "agy"
+        if ($agyCtx) {
+            Write-Host "     $bold Active Session Context:$reset $bold$($agyCtx.detailed)$reset"
+            Write-Host ""
+        }
+
         Write-Host "     $bold Gemini Models (Flash, Pro):$reset"
         Write-Host "     $gColor[$(Get-ProgressBar $g5h 24)]$reset $bold${g5h}%$reset remaining (5h reset: $($g5hB.reset_text))"
         Write-Host "     $dim Weekly limit: ${gWk}% remaining (resets in: $($gWkB.reset_text))$reset"
@@ -474,6 +628,12 @@ if ($Dashboard) {
         $csColor = if ($codex.secondary.remaining -ge 50) { $green } elseif ($codex.secondary.remaining -ge 20) { $yellow } else { $red }
 
         Write-Host "     $dim Account: $($codex.email) ($($codex.plan.ToUpper()) plan) | Credits: $($codex.credits) reset credits$reset"
+        $codexCtx = Get-AgentContext "codex"
+        if ($codexCtx) {
+            Write-Host "     $bold Active Session Context:$reset $bold$($codexCtx.detailed)$reset"
+            Write-Host ""
+        }
+
         Write-Host "     $bold 5-Hour Session Limit:$reset"
         Write-Host "     $cpColor[$(Get-ProgressBar $codex.primary.remaining 24)]$reset $bold$($codex.primary.remaining)%$reset remaining (resets in $($codex.primary.reset_text))"
         Write-Host "     $bold 7-Day Weekly Limit:$reset"
@@ -501,7 +661,8 @@ if ($Dashboard) {
                     $statusText = if ($p.agent_status) { "$statusColor$($p.agent_status)$reset" } else { "active" }
                     $focusMark = if ($p.focused) { "$cyan* $reset" } else { "  " }
                     $tokenQuota = if ($p.tokens -and $p.tokens.quota) { " | Quota: $($p.tokens.quota)" } else { "" }
-                    Write-Host "    $focusMark[$($p.pane_id)] $bold$agentName$reset ($($p.workspace_id)/$($p.tab_id)) - $statusText$dim$tokenQuota$reset"
+                    $tokenContext = if ($p.tokens -and $p.tokens.context) { " | Context: $($p.tokens.context)" } else { "" }
+                    Write-Host "    $focusMark[$($p.pane_id)] $bold$agentName$reset ($($p.workspace_id)/$($p.tab_id)) - $statusText$dim$tokenQuota$tokenContext$reset"
                 }
             } catch {}
         }
@@ -511,6 +672,43 @@ if ($Dashboard) {
     Write-Host "$dim  ---------------------------------------------------------------------$reset"
     Write-Host "$dim  Press Enter or Esc to close...$reset"
     $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+    exit 0
+}
+
+# === CONTEXT ONLY DISPLAY ===
+if ($Context) {
+    $esc = [char]27
+    $bold = "$esc[1m"
+    $reset = "$esc[0m"
+    $cyan = "$esc[36m"
+    $magenta = "$esc[35m"
+    $blue = "$esc[34m"
+    $dim = "$esc[2m"
+
+    Write-Host "$cyan$bold==> CodexBar: AI Context & Token Monitor$reset"
+    Write-Host ""
+
+    $agyCtx = Get-AgentContext "agy"
+    Write-Host "$magenta$bold[Antigravity / Agy]$reset"
+    if ($agyCtx) {
+        Write-Host "  Session Context:   $bold$($agyCtx.detailed)$reset"
+        Write-Host "  Estimated Tokens:  $($agyCtx.raw_tokens)"
+        Write-Host "  Transcript Size:   $($agyCtx.size_str) ($($agyCtx.raw_bytes) bytes)"
+    } else {
+        Write-Host "  No active Agy session found."
+    }
+    Write-Host ""
+
+    $codexCtx = Get-AgentContext "codex"
+    Write-Host "$blue$bold[OpenAI Codex]$reset"
+    if ($codexCtx) {
+        Write-Host "  Session Context:   $bold$($codexCtx.detailed)$reset"
+        if ($codexCtx.pct -ne $null) {
+            Write-Host "  Context Used:      $($codexCtx.pct)%"
+        }
+    } else {
+        Write-Host "  No active Codex session found."
+    }
     exit 0
 }
 
@@ -545,6 +743,11 @@ if ($showAgy) {
         $gColor = if ($g5h -ge 50) { $green } elseif ($g5h -ge 20) { $yellow } else { $red }
         $tpColor = if ($tp5h -ge 50) { $green } elseif ($tp5h -ge 20) { $yellow } else { $red }
 
+        $agyCtx = Get-AgentContext "agy"
+        if ($agyCtx) {
+            Write-Host "  Session Context:   $bold$($agyCtx.detailed)$reset"
+        }
+
         Write-Host "  Gemini Models:     5h $gColor${g5h}%$reset (resets in $($g5hB.reset_text)) | Weekly: ${gWk}%"
         Write-Host "  Claude/GPT Models: 5h $tpColor${tp5h}%$reset (resets in $($tp5hB.reset_text)) | Weekly: ${tpWk}%"
     }
@@ -563,6 +766,10 @@ if ($showCodex) {
         $csColor = if ($codex.secondary.remaining -ge 50) { $green } elseif ($codex.secondary.remaining -ge 20) { $yellow } else { $red }
 
         Write-Host "  Account: $($codex.email) ($($codex.plan.ToUpper())) | Credits: $($codex.credits)"
+        $codexCtx = Get-AgentContext "codex"
+        if ($codexCtx) {
+            Write-Host "  Session Context:   $bold$($codexCtx.detailed)$reset"
+        }
         Write-Host "  Session 5h: $cpColor$($codex.primary.remaining)%$reset (resets in $($codex.primary.reset_text))"
         Write-Host "  Weekly 7d:  $csColor$($codex.secondary.remaining)%$reset (resets in $($codex.secondary.reset_text))"
     }

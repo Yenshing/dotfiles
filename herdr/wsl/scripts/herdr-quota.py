@@ -237,6 +237,139 @@ def get_agy_quota() -> dict:
     return {"error": "Antigravity service not reachable"}
 
 
+def get_agent_context(agent_name: str, session_id: str = "") -> dict:
+    agent = (agent_name or "").lower()
+
+    # 1. Anthropic Claude (Claude Code)
+    if agent in ["claude", "anthropic"]:
+        target_file = None
+        claude_projects_dir = os.path.expanduser("~/.claude/projects")
+        if os.path.exists(claude_projects_dir):
+            import glob
+            if session_id:
+                matches = glob.glob(os.path.join(claude_projects_dir, "*", f"*{session_id}*.jsonl"))
+                if matches:
+                    target_file = matches[0]
+
+            if not target_file:
+                all_files = glob.glob(os.path.join(claude_projects_dir, "*", "*.jsonl"))
+                if all_files:
+                    target_file = max(all_files, key=os.path.getmtime)
+
+        if target_file and os.path.exists(target_file):
+            try:
+                with open(target_file, "r", encoding="utf-8", errors="ignore") as f:
+                    lines = f.readlines()[-30:]
+                for line in reversed(lines):
+                    try:
+                        obj = json.loads(line)
+                        msg = obj.get("message", {})
+                        usage = msg.get("usage", {})
+                        if usage:
+                            in_tok = (
+                                usage.get("input_tokens", 0)
+                                + usage.get("cache_read_input_tokens", 0)
+                                + usage.get("cache_creation_input_tokens", 0)
+                            )
+                            tok_str = f"{round(in_tok / 1000)}k" if in_tok >= 1000 else str(in_tok)
+                            pct = round((in_tok / 200000.0) * 100)
+                            return {
+                                "agent": "claude",
+                                "tokens_str": tok_str,
+                                "pct": pct,
+                                "display": f"ctx: {tok_str}",
+                                "detailed": f"{tok_str} tokens",
+                                "raw_tokens": in_tok,
+                            }
+                    except Exception:
+                        pass
+                sz = os.path.getsize(target_file)
+                tok_str = f"~{round(sz / 3800)}k"
+                return {
+                    "agent": "claude",
+                    "tokens_str": tok_str,
+                    "display": f"ctx: {tok_str}",
+                    "detailed": f"{tok_str} tokens",
+                    "raw_tokens": round(sz / 3.8),
+                }
+            except Exception:
+                pass
+
+    # 2. Google Antigravity (Agy)
+    if agent in ["agy", "antigravity", "gemini"]:
+        brain_base = os.path.expanduser("~/.gemini/antigravity-cli/brain")
+        if not os.path.exists(brain_base):
+            win_brain = "/mnt/c/Users/cyc76/.gemini/antigravity-cli/brain"
+            if os.path.exists(win_brain):
+                brain_base = win_brain
+
+        target_log = None
+        if os.path.exists(brain_base):
+            if session_id:
+                sess_dir = os.path.join(brain_base, session_id)
+                if os.path.isdir(sess_dir):
+                    f_full = os.path.join(sess_dir, ".system_generated/logs/transcript_full.jsonl")
+                    f_compact = os.path.join(sess_dir, ".system_generated/logs/transcript.jsonl")
+                    if os.path.exists(f_full):
+                        target_log = f_full
+                    elif os.path.exists(f_compact):
+                        target_log = f_compact
+
+            if not target_log:
+                dirs = [
+                    os.path.join(brain_base, d)
+                    for d in os.listdir(brain_base)
+                    if os.path.isdir(os.path.join(brain_base, d))
+                ]
+                if dirs:
+                    latest_dir = max(dirs, key=os.path.getmtime)
+                    f_full = os.path.join(latest_dir, ".system_generated/logs/transcript_full.jsonl")
+                    f_compact = os.path.join(latest_dir, ".system_generated/logs/transcript.jsonl")
+                    if os.path.exists(f_full):
+                        target_log = f_full
+                    elif os.path.exists(f_compact):
+                        target_log = f_compact
+
+        if target_log and os.path.exists(target_log):
+            try:
+                sz = os.path.getsize(target_log)
+                est_tokens = round(sz / 3.8)
+                tok_str = (
+                    f"{round(est_tokens / 1000000.0, 1)}M"
+                    if est_tokens >= 1000000
+                    else (f"{round(est_tokens / 1000.0)}k" if est_tokens >= 1000 else str(est_tokens))
+                )
+                size_str = (
+                    f"{round(sz / 1048576.0, 1)}MB"
+                    if sz >= 1048576
+                    else f"{round(sz / 1024.0)}KB"
+                )
+                return {
+                    "agent": "agy",
+                    "tokens_str": f"~{tok_str}",
+                    "size_str": size_str,
+                    "display": f"ctx: ~{tok_str}",
+                    "detailed": f"~{tok_str} tokens ({size_str})",
+                    "raw_tokens": est_tokens,
+                    "raw_bytes": sz,
+                }
+            except Exception:
+                pass
+
+    return None
+
+
+def get_pane_context(pane: dict) -> dict:
+    if not pane or not isinstance(pane, dict):
+        return None
+    agent = str(pane.get("agent") or "")
+    session_id = ""
+    sess_obj = pane.get("agent_session")
+    if sess_obj and isinstance(sess_obj, dict):
+        session_id = str(sess_obj.get("value") or "")
+    return get_agent_context(agent, session_id)
+
+
 def get_all_quotas(bypass_cache: bool = False) -> dict:
     cached = None
     if os.path.exists(CACHE_FILE):
@@ -327,6 +460,7 @@ def update_herdr_panes(quotas: dict):
         if not pane_id:
             continue
         agent = str(pane.get("agent") or "").lower()
+        ctx = get_pane_context(pane)
 
         val = ""
         if agent in ["claude", "anthropic"]:
@@ -347,17 +481,20 @@ def update_herdr_panes(quotas: dict):
 
         if val:
             try:
+                cmd = [
+                    "herdr",
+                    "pane",
+                    "report-metadata",
+                    pane_id,
+                    "--source",
+                    "codexbar",
+                    "--token",
+                    f"quota={val}",
+                ]
+                if ctx and ctx.get("display"):
+                    cmd.extend(["--token", f"context={ctx['display']}"])
                 subprocess.run(
-                    [
-                        "herdr",
-                        "pane",
-                        "report-metadata",
-                        pane_id,
-                        "--source",
-                        "codexbar",
-                        "--token",
-                        f"quota={val}",
-                    ],
+                    cmd,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     timeout=2,
@@ -370,6 +507,7 @@ def run_status(quotas: dict):
     update_herdr_panes(quotas)
 
     focused_agent = ""
+    focused_pane = None
     try:
         proc = subprocess.run(
             ["herdr", "pane", "list"],
@@ -383,6 +521,7 @@ def run_status(quotas: dict):
             for p in panes_obj.get("result", {}).get("panes", []):
                 if p.get("focused"):
                     focused_agent = str(p.get("agent") or "").lower()
+                    focused_pane = p
                     break
     except Exception:
         pass
@@ -398,10 +537,13 @@ def run_status(quotas: dict):
     g5h = f"{g5h_b.get('remaining')}%" if g5h_b else "N/A"
     g_reset = f" ({g5h_b.get('reset_text')})" if g5h_b and g5h_b.get("reset_text") else ""
 
+    ctx = get_pane_context(focused_pane) if focused_pane else None
+    ctx_part = f" | {ctx['display']}" if ctx and ctx.get("display") else ""
+
     if focused_agent in ["agy", "antigravity"]:
-        print(f"Agy 5h: {g5h}{g_reset}  (Claude 5h: {c5h})")
+        print(f"Agy 5h: {g5h}{g_reset}{ctx_part}  (Claude 5h: {c5h})")
     elif focused_agent in ["claude", "anthropic"]:
-        print(f"Claude 5h: {c5h}{c_reset}  (Agy 5h: {g5h})")
+        print(f"Claude 5h: {c5h}{c_reset}{ctx_part}  (Agy 5h: {g5h})")
     else:
         print(f"Claude 5h: {c5h}  |  Agy 5h: {g5h}")
 
@@ -451,6 +593,11 @@ def run_dashboard(quotas: dict):
         cp_color = get_color_for_percent(cp_rem)
         cs_color = get_color_for_percent(cs_rem)
 
+        claude_ctx = get_agent_context("claude")
+        if claude_ctx:
+            print(f"     {BOLD}Active Session Context:{RESET} {BOLD}{claude_ctx['detailed']}{RESET}")
+            print()
+
         print(f"     {BOLD}5-Hour Session Limit:{RESET}")
         print(f"     {cp_color}[{get_progress_bar(cp_rem, 24)}]{RESET} {BOLD}{cp_rem}%{RESET} remaining (resets in {cp.get('reset_text', 'now')})")
         print(f"     {BOLD}7-Day Weekly Limit:{RESET}")
@@ -474,6 +621,11 @@ def run_dashboard(quotas: dict):
         g_wk_reset_t = g_wk_b.get("reset_text", "now") if g_wk_b else ""
         tp_reset_t = tp5h_b.get("reset_text", "now") if tp5h_b else ""
         tp_wk_reset_t = tp_wk_b.get("reset_text", "now") if tp_wk_b else ""
+
+        agy_ctx = get_agent_context("agy")
+        if agy_ctx:
+            print(f"     {BOLD}Active Session Context:{RESET} {BOLD}{agy_ctx['detailed']}{RESET}")
+            print()
 
         print(f"     {BOLD}Gemini Models (Flash, Pro):{RESET}")
         print(f"     {g_color}[{get_progress_bar(g5h, 24)}]{RESET} {BOLD}{g5h}%{RESET} remaining (5h reset: {g_reset_t})")
@@ -505,7 +657,8 @@ def run_dashboard(quotas: dict):
                 focus_mark = f"{CYAN}* {RESET}" if p.get("focused") else "  "
                 tokens = p.get("tokens") or {}
                 t_quota = f" | Quota: {tokens.get('quota')}" if tokens.get("quota") else ""
-                print(f"    {focus_mark}[{p.get('pane_id')}] {BOLD}{agent_name}{RESET} ({p.get('workspace_id')}/{p.get('tab_id')}) - {st_text}{DIM}{t_quota}{RESET}")
+                t_ctx = f" | Context: {tokens.get('context')}" if tokens.get("context") else ""
+                print(f"    {focus_mark}[{p.get('pane_id')}] {BOLD}{agent_name}{RESET} ({p.get('workspace_id')}/{p.get('tab_id')}) - {st_text}{DIM}{t_quota}{t_ctx}{RESET}")
     except Exception:
         pass
 
@@ -533,14 +686,15 @@ def run_dashboard(quotas: dict):
 
 
 def print_help():
-    print("CodexBar for Herdr (WSL) - Multi-Agent AI Quota Monitor")
+    print("CodexBar for Herdr (WSL) - Multi-Agent AI Quota & Context Monitor")
     print()
     print("Usage:")
     print("  codexbar                 Display current usage for both Claude and Agy")
     print("  codexbar agy             Display only Antigravity (Gemini / Claude / GPT) usage")
     print("  codexbar claude          Display only Anthropic Claude usage")
-    print("  codexbar dash            Open the full interactive ASCII dashboard")
-    print("  codexbar status          Print single-line 5h status for Herdr tab bar")
+    print("  codexbar context (ctx)   Display current session context / token usage")
+    print("  codexbar dash            Open the full interactive ASCII dashboard (includes ctx)")
+    print("  codexbar status          Print single-line 5h & context status for Herdr tab bar")
     print("  codexbar update          Update Herdr sidebar metadata for all agent panes")
     print("  codexbar refresh         Force refresh cache from APIs and print")
     print("  codexbar json            Output raw quota data as JSON")
@@ -553,6 +707,28 @@ def main():
         print_help()
         sys.exit(0)
 
+    if target in ["context", "ctx", "--context"]:
+        print(f"{CYAN}{BOLD}==> CodexBar: AI Context & Token Monitor (WSL){RESET}")
+        print()
+        claude_ctx = get_agent_context("claude")
+        print(f"{BLUE}{BOLD}[Anthropic Claude]{RESET}")
+        if claude_ctx:
+            print(f"  Session Context:   {BOLD}{claude_ctx['detailed']}{RESET}")
+            if "pct" in claude_ctx:
+                print(f"  Context Used:      {claude_ctx['pct']}%")
+        else:
+            print("  No active Claude session found.")
+        print()
+        agy_ctx = get_agent_context("agy")
+        print(f"{MAGENTA}{BOLD}[Antigravity / Agy]{RESET}")
+        if agy_ctx:
+            print(f"  Session Context:   {BOLD}{agy_ctx['detailed']}{RESET}")
+            print(f"  Estimated Tokens:  {agy_ctx['raw_tokens']}")
+            print(f"  Transcript Size:   {agy_ctx['size_str']} ({agy_ctx.get('raw_bytes', 0)} bytes)")
+        else:
+            print("  No active Agy session found.")
+        sys.exit(0)
+
     bypass_cache = target in ["refresh", "reload", "--refresh"]
     quotas = get_all_quotas(bypass_cache=bypass_cache)
 
@@ -562,7 +738,7 @@ def main():
 
     if target in ["update", "update-panes", "--update"]:
         update_herdr_panes(quotas)
-        print("Herdr panes metadata updated with 5h quota.")
+        print("Herdr panes metadata updated with 5h quota and context.")
         sys.exit(0)
 
     if target in ["status", "status-bar", "statusbar", "--status"]:
@@ -601,6 +777,10 @@ def main():
             if header:
                 print(f"  {DIM}{' '.join(header)}{RESET}")
 
+            claude_ctx = get_agent_context("claude")
+            if claude_ctx:
+                print(f"  Session Context:   {BOLD}{claude_ctx['detailed']}{RESET}")
+
             cp = claude.get("primary", {})
             cs = claude.get("secondary", {})
             cp_rem = cp.get("remaining", 0)
@@ -634,6 +814,10 @@ def main():
 
             g_reset_t = g5h_b.get("reset_text", "now") if g5h_b else ""
             tp_reset_t = tp5h_b.get("reset_text", "now") if tp5h_b else ""
+
+            agy_ctx = get_agent_context("agy")
+            if agy_ctx:
+                print(f"  Session Context:   {BOLD}{agy_ctx['detailed']}{RESET}")
 
             print(f"  Gemini Models:     5h {g_col}{g5h}%{RESET} (resets in {g_reset_t}) | Weekly: {gwk}%")
             print(f"  Claude/GPT Models: 5h {tp_col}{tp5h}%{RESET} (resets in {tp_reset_t}) | Weekly: {tpwk}%")
