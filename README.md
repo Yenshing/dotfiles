@@ -9,6 +9,7 @@
 ```text
 IT-Settings/
 ├── README.md                 # 完整還原與設定說明文件
+├── ARCHITECTURE.md           # [架構規範] Multi-Agent 職責分工與 WezTerm/Herdr 架構圖
 ├── restore-windows.ps1       # [一鍵還原] Windows 端設定 (WezTerm, Herdr, codexbar)
 ├── restore-wsl.sh            # [一鍵還原] WSL 端設定 (Zsh, p10k, Herdr, codexbar)
 ├── wezterm/
