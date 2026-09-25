@@ -79,11 +79,11 @@ confirm_close = false  # no confirmation prompt when closing a workspace
 row_gap = 0
 rows = [["state_icon", "machine", "workspace", "tab"], ["agent"], ["$quota", "$context"]]
 
-[[ui.tab_bar_right]]
-type = "command"
-command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:/Users/cyc76/AppData/Roaming/herdr/scripts/herdr-quota.ps1\" -StatusBar"
-interval_seconds = 60
-timeout_seconds = 5
+# [[ui.tab_bar_right]]
+# type = "command"
+# command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:/Users/cyc76/AppData/Roaming/herdr/scripts/herdr-quota.ps1\" -StatusBar"
+# interval_seconds = 60
+# timeout_seconds = 5
 
 [ui.toast.clipboard]
 enabled = false
