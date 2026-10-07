@@ -19,7 +19,7 @@ IT-Settings/
 │   ├── windows/
 │   │   ├── config.toml       # Windows Herdr 設定 (tmux 鍵位、右側配額列、prefix+q)
 │   │   ├── scripts/
-│   │   │   └── herdr-quota.ps1 # Windows 端 CodexBar (監控 Codex 與 Agy)
+│   │   │   └── herdr-quota.ps1 # Windows 端 CodexBar (監控 Codex、Claude 與 Agy)
 │   │   └── bin/
 │   │       ├── codexbar      # Windows bash 入口
 │   │       ├── codexbar.cmd  # Windows cmd 入口
@@ -100,11 +100,13 @@ bash ./restore-wsl.sh
 
 ### 第四步：各 Agent 登入授權
 
-* **Claude Code (WSL)**：
-  ```bash
-  claude
-  ```
-  完成網頁 OAuth 登入後，`codexbar` 即可自動讀取 `~/.claude/.credentials.json` 監控 5h 與 7d 限額。
+* **Claude Code (Windows & WSL)**：
+  * **Windows**：安裝於 `~/.local/bin/claude.exe`，憑證位於 `~/.claude/.credentials.json`。若 WSL 端已完成授權，Windows 端會自動無縫讀取與同步。
+  * **WSL**：
+    ```bash
+    claude
+    ```
+    完成網頁 OAuth 登入後，`codexbar` 即可自動讀取 `~/.claude/.credentials.json` 監控 5h 與 7d 限額。
 * **Google Antigravity / Agy (Windows & WSL)**：
   ```bash
   agy
@@ -144,9 +146,9 @@ bash ./restore-wsl.sh
 | :--- | :--- |
 | `codexbar` | 查看當前環境的所有 AI Agent 用量與目前 Session Context |
 | `codexbar context` (`ctx`) | 查看當前各 Agent Session 的 Context Window 與 Token 消耗量 |
-| `codexbar agy` | 僅查看 Antigravity (Gemini / Claude / GPT) 用量與 Context |
-| `codexbar claude` | 僅查看 Anthropic Claude 用量與 Context（WSL 端） |
+| `codexbar claude` | 僅查看 Anthropic Claude 用量與 Context（Windows & WSL 端） |
 | `codexbar codex` | 僅查看 OpenAI Codex 用量與 Context（Windows 端） |
+| `codexbar agy` | 僅查看 Antigravity (Gemini / Claude / GPT) 用量與 Context |
 | `codexbar dash` | 終端內開啟互動式 ASCII 彩色儀表板（含 Quota、Context 與 Pane 狀態） |
 | `codexbar status` | 輸出單行狀態字串（含聚焦 Agent Context）並更新 Herdr Pane Metadata |
 | `codexbar refresh` | 略過快取直接向 API 重新擷取最新數據 |

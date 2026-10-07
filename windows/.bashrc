@@ -8,8 +8,8 @@ alias ls='ls -F --color=auto --show-control-chars -N'
 alias ll='ls -la'
 alias gst='git status'
 
-# User local bin (codexbar, etc.)
-export PATH="$HOME/bin:$HOME/AppData/Local/agy/bin:$PATH"
+# User local bin (claude, codexbar, agy, etc.)
+export PATH="$HOME/.local/bin:$HOME/bin:$HOME/AppData/Local/agy/bin:$PATH"
 
 # Herdr / Terminal Live CWD integration (OSC 9;9)
 # 自動向 Herdr 回報目前工作目錄，讓 Windows 端的 Herdr 能在 cd 切換目錄時即時更新 workspace

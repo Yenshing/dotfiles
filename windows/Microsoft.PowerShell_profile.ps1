@@ -7,7 +7,19 @@
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding           = [System.Text.Encoding]::UTF8
 
-# 2. Add Git GNU Linux tools to PATH
+# 2. Add user bin directories and Git GNU Linux tools to PATH
+$userLocalBin = "$HOME\.local\bin"
+if (Test-Path $userLocalBin) {
+    if ($env:Path -notlike "*$userLocalBin*") {
+        $env:Path = "$userLocalBin;" + $env:Path
+    }
+}
+$userBin = "$HOME\bin"
+if (Test-Path $userBin) {
+    if ($env:Path -notlike "*$userBin*") {
+        $env:Path = "$userBin;" + $env:Path
+    }
+}
 $gitUsrBin = "C:\Program Files\Git\usr\bin"
 if (Test-Path $gitUsrBin) {
     if ($env:Path -notlike "*$gitUsrBin*") {

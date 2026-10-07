@@ -61,13 +61,20 @@ if (Test-Path $binSrc) {
     Write-Host "[OK] codexbar CLI tools restored to: $binDir" -ForegroundColor Green
 }
 
-# 4. Check if $HOME\bin is in User PATH
+# 4. Check if $HOME\bin and $HOME\.local\bin are in User PATH
 $targetUser = [System.EnvironmentVariableTarget]::User
 $userPath = [Environment]::GetEnvironmentVariable("Path", $targetUser)
-if ($userPath -notlike "*$binDir*") {
-    $newPath = $binDir + ";" + $userPath
-    [Environment]::SetEnvironmentVariable("Path", $newPath, $targetUser)
-    Write-Host "[OK] Added $binDir to User PATH environment variable." -ForegroundColor Yellow
+$localBinDir = Join-Path $HOME ".local\bin"
+if (-not (Test-Path $localBinDir)) {
+    New-Item -ItemType Directory -Path $localBinDir -Force | Out-Null
+}
+$pathsToCheck = @($binDir, $localBinDir)
+foreach ($p in $pathsToCheck) {
+    if ($userPath -notlike "*$p*") {
+        $userPath = $p + ";" + $userPath
+        [Environment]::SetEnvironmentVariable("Path", $userPath, $targetUser)
+        Write-Host "[OK] Added $p to User PATH environment variable." -ForegroundColor Yellow
+    }
 }
 
 # 5. Restore Git Bash and PowerShell shell integration configs

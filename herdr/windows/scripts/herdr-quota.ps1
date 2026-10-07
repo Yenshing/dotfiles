@@ -1,8 +1,8 @@
 <#
 .SYNOPSIS
-    CodexBar for Herdr - Multi-Agent AI Usage & Quota Monitor (Codex & Antigravity)
+    CodexBar for Herdr - Multi-Agent AI Usage & Quota Monitor (Codex, Claude & Antigravity)
 .DESCRIPTION
-    Monitors both OpenAI Codex and Google Antigravity (Agy / Gemini / Claude) quota,
+    Monitors OpenAI Codex, Anthropic Claude (Claude Code), and Google Antigravity (Agy / Gemini / Claude) quota,
     providing 5h tab-bar status, 5h sidebar agent metadata, and a full 5h/7d modal dashboard.
 #>
 
@@ -203,6 +203,66 @@ function Get-AgentContext([string]$agentName, [string]$sessionId = "") {
         }
     }
 
+    # 3. Anthropic Claude (Claude Code)
+    if ($agent -in @("claude", "anthropic")) {
+        $claudeProjectsDir = "$HOME\.claude\projects"
+        $targetFile = $null
+
+        if ($sessionId -and (Test-Path $claudeProjectsDir)) {
+            $found = Get-ChildItem -Path $claudeProjectsDir -Filter "*$sessionId*.jsonl" -Recurse -File -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            if ($found) { $targetFile = $found.FullName }
+        }
+
+        if (-not $targetFile -and (Test-Path $claudeProjectsDir)) {
+            $latest = Get-ChildItem -Path $claudeProjectsDir -Filter "*.jsonl" -Recurse -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if ($latest) { $targetFile = $latest.FullName }
+        }
+
+        if ($targetFile -and (Test-Path $targetFile)) {
+            try {
+                $tailLines = Get-Content $targetFile -Tail 30 -ErrorAction SilentlyContinue
+                if ($tailLines) {
+                    for ($i = $tailLines.Count - 1; $i -ge 0; $i--) {
+                        $line = $tailLines[$i]
+                        if ($line -match '"input_tokens"') {
+                            try {
+                                $parsed = $line | ConvertFrom-Json
+                                $usage = $parsed.message.usage
+                                if ($usage -and $usage.input_tokens -ne $null) {
+                                    $inTok = [long]$usage.input_tokens +
+                                        [long](if ($usage.cache_read_input_tokens) { $usage.cache_read_input_tokens } else { 0 }) +
+                                        [long](if ($usage.cache_creation_input_tokens) { $usage.cache_creation_input_tokens } else { 0 })
+                                    $tokStr = if ($inTok -ge 1000) { "$([math]::Round($inTok / 1000))k" } else { "$inTok" }
+                                    $pct = [math]::Round(($inTok / 200000.0) * 100)
+                                    return [ordered]@{
+                                        agent = "claude"
+                                        tokens_str = $tokStr
+                                        pct = $pct
+                                        display = "ctx: $tokStr"
+                                        detailed = "$tokStr tokens"
+                                        raw_tokens = $inTok
+                                    }
+                                }
+                            } catch {}
+                        }
+                    }
+                }
+
+                $bytes = (Get-Item $targetFile).Length
+                $tokStr = "~$([math]::Round($bytes / 3800))k"
+                return [ordered]@{
+                    agent = "claude"
+                    tokens_str = $tokStr
+                    display = "ctx: $tokStr"
+                    detailed = "$tokStr tokens"
+                    raw_tokens = [math]::Round($bytes / 3.8)
+                }
+            } catch {}
+        }
+    }
+
     return $null
 }
 
@@ -214,6 +274,100 @@ function Get-PaneContext($pane) {
         $sessId = [string]$pane.agent_session.value
     }
     return Get-AgentContext $agent $sessId
+}
+
+function Get-ClaudeQuota($cachedProfile = $null) {
+    $credPath = "$HOME\.claude\.credentials.json"
+    if (-not (Test-Path $credPath)) {
+        # Fallback to WSL credentials if Windows credentials don't exist yet
+        $wslCred1 = "\\wsl.localhost\Ubuntu\home\james\.claude\.credentials.json"
+        $wslCred2 = "\\wsl$\Ubuntu\home\james\.claude\.credentials.json"
+        if (Test-Path $wslCred1) { $credPath = $wslCred1 }
+        elseif (Test-Path $wslCred2) { $credPath = $wslCred2 }
+        else {
+            return @{ Error = "Claude credentials.json not found" }
+        }
+    }
+
+    try {
+        $cred = Get-Content $credPath -Raw | ConvertFrom-Json
+        $token = $cred.claudeAiOauth.accessToken
+        $plan = if ($cred.claudeAiOauth.subscriptionType) { $cred.claudeAiOauth.subscriptionType } else { "unknown" }
+        if (-not $token) {
+            return @{ Error = "No access token in Claude credentials" }
+        }
+
+        $headers = @{
+            "Authorization" = "Bearer $token"
+            "anthropic-beta" = "oauth-2025-04-20"
+            "User-Agent" = "claude-code/2.1.291"
+        }
+
+        $usage = Invoke-RestMethod -Uri "https://api.anthropic.com/api/oauth/usage" -Headers $headers -Method Get -TimeoutSec 5
+        $nowUtc = [DateTime]::UtcNow
+
+        $fh = $usage.five_hour
+        $fhUtil = if ($fh -and $fh.utilization -ne $null) { [double]$fh.utilization } else { 0.0 }
+        $fhUsed = [math]::Round($fhUtil)
+        $fhRem = [math]::Max(0, 100 - $fhUsed)
+        $fhResetSec = 0
+        $fhResetText = ""
+        if ($fh -and $fh.resets_at) {
+            try {
+                $dt = [DateTimeOffset]::Parse($fh.resets_at).UtcDateTime
+                $diff = $dt - $nowUtc
+                $fhResetSec = [math]::Max(0, [long]$diff.TotalSeconds)
+                $fhResetText = Format-Duration $fhResetSec
+            } catch {}
+        }
+
+        $sd = $usage.seven_day
+        $sdUtil = if ($sd -and $sd.utilization -ne $null) { [double]$sd.utilization } else { 0.0 }
+        $sdUsed = [math]::Round($sdUtil)
+        $sdRem = [math]::Max(0, 100 - $sdUsed)
+        $sdResetSec = 0
+        $sdResetText = ""
+        if ($sd -and $sd.resets_at) {
+            try {
+                $dt = [DateTimeOffset]::Parse($sd.resets_at).UtcDateTime
+                $diff = $dt - $nowUtc
+                $sdResetSec = [math]::Max(0, [long]$diff.TotalSeconds)
+                $sdResetText = Format-Duration $sdResetSec
+            } catch {}
+        }
+
+        $email = if ($cachedProfile -and $cachedProfile.email) { $cachedProfile.email } else { "" }
+        $org = if ($cachedProfile -and $cachedProfile.org) { $cachedProfile.org } else { "" }
+        if (-not $email) {
+            try {
+                $prof = Invoke-RestMethod -Uri "https://api.anthropic.com/api/oauth/profile" -Headers $headers -Method Get -TimeoutSec 3
+                if ($prof) {
+                    if ($prof.account -and $prof.account.email) { $email = $prof.account.email }
+                    if ($prof.organization -and $prof.organization.name) { $org = $prof.organization.name }
+                }
+            } catch {}
+        }
+
+        return [ordered]@{
+            email = $email
+            plan = $plan
+            org = $org
+            primary = @{
+                used = $fhUsed
+                remaining = $fhRem
+                reset_seconds = $fhResetSec
+                reset_text = $fhResetText
+            }
+            secondary = @{
+                used = $sdUsed
+                remaining = $sdRem
+                reset_seconds = $sdResetSec
+                reset_text = $sdResetText
+            }
+        }
+    } catch {
+        return @{ Error = $_.Exception.Message }
+    }
 }
 
 function Get-CodexQuota {
@@ -313,9 +467,6 @@ function Parse-AgyCliUsage($lines) {
 
 function Get-AgyQuota {
     # 1. First priority: Antigravity IDE background language_server (fastest, ~20-50ms)
-    # NOTE: Never probe 'agy' process ports directly! agy CLI runs in the foreground terminal
-    # and probing its HTTPS listener with HTTP causes Go's net/http server to dump
-    # 'http: TLS handshake error' directly to the user's terminal window.
     $lsProcs = Get-Process -Name "language_server" -ErrorAction SilentlyContinue
     if ($lsProcs) {
         $csrfToken = ""
@@ -359,7 +510,7 @@ function Get-AgyQuota {
         }
     }
 
-    # 2. Fallback: Query agy CLI directly via `agy --print /usage` (safe, no socket probing)
+    # 2. Fallback: Query agy CLI directly via `agy --print /usage`
     $agyCmd = Get-Command agy.exe -ErrorAction SilentlyContinue
     if ($agyCmd) {
         try {
@@ -418,22 +569,34 @@ function Get-AllQuotas([bool]$bypassCache = $false) {
 
     if (-not $bypassCache -and $cached) {
         $cacheAge = ((Get-Date) - [DateTime]$cached.timestamp).TotalSeconds
-        if ($cacheAge -lt $CacheTtlSeconds -and $cached.codex -and $cached.agy -and (-not $cached.codex.Error) -and (-not $cached.agy.Error)) {
+        if ($cacheAge -lt $CacheTtlSeconds -and $cached.codex -and $cached.agy -and $cached.claude -and (-not $cached.codex.Error) -and (-not $cached.agy.Error) -and (-not $cached.claude.Error)) {
             return @{
                 codex = $cached.codex
                 agy = $cached.agy
+                claude = $cached.claude
             }
         }
     }
 
+    $cachedProfile = $null
+    if ($cached -and $cached.claude -and (-not $cached.claude.Error)) {
+        $cachedProfile = @{
+            email = $cached.claude.email
+            org = $cached.claude.org
+        }
+    }
+
+    $claude = Get-ClaudeQuota $cachedProfile
+    if ($claude.Error -and $cached -and $cached.claude -and (-not $cached.claude.Error)) {
+        $claude = $cached.claude
+    }
+
     $codex = Get-CodexQuota
-    # Fallback to cache if transient failure
     if ($codex.Error -and $cached -and $cached.codex -and (-not $cached.codex.Error)) {
         $codex = $cached.codex
     }
 
     $agy = Get-AgyQuota
-    # Fallback to cache if transient failure
     if ($agy.Error -and $cached -and $cached.agy -and (-not $cached.agy.Error)) {
         $agy = $cached.agy
     }
@@ -442,11 +605,13 @@ function Get-AllQuotas([bool]$bypassCache = $false) {
         timestamp = (Get-Date).ToString("o")
         codex = $codex
         agy = $agy
+        claude = $claude
     } | ConvertTo-Json -Depth 8 | Set-Content $CacheFile -Force
 
     return @{
         codex = $codex
         agy = $agy
+        claude = $claude
     }
 }
 
@@ -462,21 +627,27 @@ function Update-HerdrPanes($quotas) {
         $panes = $panesObj.result.panes
         $codex = $quotas.codex
         $agy = $quotas.agy
+        $claude = $quotas.claude
 
         $g5hB = Get-BucketVal $agy.gemini "5h"
-        $tp5hB = Get-BucketVal $agy.third_party "5h"
 
         foreach ($pane in $panes) {
             $ctx = Get-PaneContext $pane
             $ctxArgs = if ($ctx -and $ctx.display) { @("--token", "context=$($ctx.display)") } else { @() }
 
-            if ($pane.agent -eq "codex") {
-                if (-not $codex.Error) {
-                    $cReset = if ($codex.primary.reset_text) { " ($($codex.primary.reset_text))" } else { "" }
-                    $val = "5h $($codex.primary.remaining)%$cReset"
+            if ($pane.agent -in @("claude", "anthropic")) {
+                if (-not $claude.Error) {
+                    $cReset = if ($claude.primary.reset_text) { " ($($claude.primary.reset_text))" } else { "" }
+                    $val = "5h $($claude.primary.remaining)%$cReset"
                     & $herdrPath pane report-metadata $pane.pane_id --source codexbar --token "quota=$val" @ctxArgs 2>$null
                 }
-            } elseif ($pane.agent -eq "agy") {
+            } elseif ($pane.agent -in @("codex", "openai")) {
+                if (-not $codex.Error) {
+                    $cxReset = if ($codex.primary.reset_text) { " ($($codex.primary.reset_text))" } else { "" }
+                    $val = "5h $($codex.primary.remaining)%$cxReset"
+                    & $herdrPath pane report-metadata $pane.pane_id --source codexbar --token "quota=$val" @ctxArgs 2>$null
+                }
+            } elseif ($pane.agent -in @("agy", "antigravity", "gemini")) {
                 if (-not $agy.Error -and $g5hB) {
                     $gRes = if ($g5hB.reset_text) { " ($($g5hB.reset_text))" } else { "" }
                     $val = "5h $($g5hB.remaining)%$gRes"
@@ -484,9 +655,10 @@ function Update-HerdrPanes($quotas) {
                 }
             } else {
                 # General shell panes: show 5h summaries
-                $cVal = if (-not $codex.Error) { "$($codex.primary.remaining)%" } else { "N/A" }
+                $cxVal = if (-not $codex.Error) { "$($codex.primary.remaining)%" } else { "N/A" }
+                $clVal = if (-not $claude.Error) { "$($claude.primary.remaining)%" } else { "N/A" }
                 $gVal = if ($g5hB) { "$($g5hB.remaining)%" } else { "N/A" }
-                $val = "Codex 5h $cVal | Agy 5h $gVal"
+                $val = "Codex: $cxVal | Claude: $clVal | Agy: $gVal"
                 & $herdrPath pane report-metadata $pane.pane_id --source codexbar --token "quota=$val" 2>$null
             }
         }
@@ -495,12 +667,13 @@ function Update-HerdrPanes($quotas) {
 
 # --- HELP DISPLAY ---
 if ($Help) {
-    Write-Host "CodexBar for Herdr - Multi-Agent AI Quota & Context Monitor"
+    Write-Host "CodexBar for Herdr - Multi-Agent AI Quota & Context Monitor (Codex, Claude, Agy)"
     Write-Host ""
     Write-Host "Usage:"
-    Write-Host "  codexbar                 Display current usage for both Agy and Codex"
-    Write-Host "  codexbar agy             Display only Antigravity (Gemini / Claude / GPT) usage"
+    Write-Host "  codexbar                 Display current usage for all agents (Claude, Codex, Agy)"
+    Write-Host "  codexbar claude          Display only Anthropic Claude usage"
     Write-Host "  codexbar codex           Display only OpenAI Codex usage"
+    Write-Host "  codexbar agy             Display only Antigravity (Gemini / Claude / GPT) usage"
     Write-Host "  codexbar context (ctx)   Display current session context / token usage"
     Write-Host "  codexbar dash            Open the full interactive ASCII dashboard (includes 7d, 3p, ctx)"
     Write-Host "  codexbar status          Print single-line 5h & context status for Herdr tab bar"
@@ -514,6 +687,7 @@ if ($Help) {
 $quotas = Get-AllQuotas -bypassCache ($Refresh -or $Target -eq "refresh")
 $codex = $quotas.codex
 $agy = $quotas.agy
+$claude = $quotas.claude
 
 $g5hB = Get-BucketVal $agy.gemini "5h"
 $gWkB = Get-BucketVal $agy.gemini "weekly"
@@ -545,15 +719,18 @@ if ($StatusBar) {
                 $panesObj = $panesJson | ConvertFrom-Json
                 $focused = $panesObj.result.panes | Where-Object { $_.focused -eq $true } | Select-Object -First 1
                 if ($focused) {
-                    $focusedAgent = $focused.agent
+                    $focusedAgent = [string]$focused.agent
                     $focusedPane = $focused
                 }
             } catch {}
         }
     }
 
-    $c5h = if (-not $codex.Error) { "$($codex.primary.remaining)%" } else { "N/A" }
-    $cReset = if (-not $codex.Error -and $codex.primary.reset_text) { " ($($codex.primary.reset_text))" } else { "" }
+    $c5h = if (-not $claude.Error) { "$($claude.primary.remaining)%" } else { "N/A" }
+    $cReset = if (-not $claude.Error -and $claude.primary.reset_text) { " ($($claude.primary.reset_text))" } else { "" }
+
+    $cx5h = if (-not $codex.Error) { "$($codex.primary.remaining)%" } else { "N/A" }
+    $cxReset = if (-not $codex.Error -and $codex.primary.reset_text) { " ($($codex.primary.reset_text))" } else { "" }
 
     $g5h = if ($g5hB) { "$($g5hB.remaining)%" } else { "N/A" }
     $gReset = if ($g5hB -and $g5hB.reset_text) { " ($($g5hB.reset_text))" } else { "" }
@@ -561,12 +738,14 @@ if ($StatusBar) {
     $ctx = if ($focusedPane) { Get-PaneContext $focusedPane } else { $null }
     $ctxPart = if ($ctx -and $ctx.display) { " | $($ctx.display)" } else { "" }
 
-    if ($focusedAgent -eq "agy") {
-        Write-Output "Agy 5h: $g5h$gReset$ctxPart  (Codex 5h: $c5h)"
-    } elseif ($focusedAgent -eq "codex") {
-        Write-Output "Codex 5h: $c5h$cReset$ctxPart  (Agy 5h: $g5h)"
+    if ($focusedAgent -in @("claude", "anthropic")) {
+        Write-Output "Claude 5h: $c5h$cReset$ctxPart  (Codex 5h: $cx5h | Agy 5h: $g5h)"
+    } elseif ($focusedAgent -in @("codex", "openai")) {
+        Write-Output "Codex 5h: $cx5h$cxReset$ctxPart  (Claude 5h: $c5h | Agy 5h: $g5h)"
+    } elseif ($focusedAgent -in @("agy", "antigravity")) {
+        Write-Output "Agy 5h: $g5h$gReset$ctxPart  (Codex 5h: $cx5h | Claude 5h: $c5h)"
     } else {
-        Write-Output "Agy 5h: $g5h  |  Codex 5h: $c5h"
+        Write-Output "Codex 5h: $cx5h  |  Claude 5h: $c5h  |  Agy 5h: $g5h"
     }
     exit 0
 }
@@ -590,8 +769,65 @@ if ($Dashboard) {
     Write-Host "$cyan$bold  +-------------------------------------------------------------------+$reset"
     Write-Host ""
 
-    # === SECTION 1: ANTIGRAVITY (AGY) ===
-    Write-Host "  $magenta$bold[1] Google Antigravity (Agy)$reset"
+    # === SECTION 1: ANTHROPIC CLAUDE ===
+    Write-Host "  $blue$bold[1] Anthropic Claude (Claude Code)$reset"
+    if ($claude.Error) {
+        Write-Host "     $red Error: $($claude.Error)$reset"
+    } else {
+        $infoParts = @()
+        if ($claude.email) { $infoParts += "Account: $($claude.email)" }
+        if ($claude.plan) { $infoParts += "($($claude.plan.ToUpper()) plan)" }
+        if ($claude.org) { $infoParts += "Org: $($claude.org)" }
+        if ($infoParts.Count -gt 0) {
+            Write-Host "     $dim$($infoParts -join ' ')$reset"
+        }
+
+        $cpRem = if ($claude.primary.remaining -ne $null) { $claude.primary.remaining } else { 0 }
+        $csRem = if ($claude.secondary.remaining -ne $null) { $claude.secondary.remaining } else { 0 }
+        $cpColor = if ($cpRem -ge 50) { $green } elseif ($cpRem -ge 20) { $yellow } else { $red }
+        $csColor = if ($csRem -ge 50) { $green } elseif ($csRem -ge 20) { $yellow } else { $red }
+
+        $claudeCtx = Get-AgentContext "claude"
+        if ($claudeCtx) {
+            Write-Host "     $bold Active Session Context:$reset $bold$($claudeCtx.detailed)$reset"
+            Write-Host ""
+        }
+
+        $cpResetStr = if ($claude.primary.reset_text) { " (resets in $($claude.primary.reset_text))" } else { "" }
+        $csResetStr = if ($claude.secondary.reset_text) { " (resets in $($claude.secondary.reset_text))" } else { "" }
+        Write-Host "     $bold 5-Hour Session Limit:$reset"
+        Write-Host "     $cpColor[$(Get-ProgressBar $cpRem 24)]$reset $bold${cpRem}%$reset remaining$cpResetStr"
+        Write-Host "     $bold 7-Day Weekly Limit:$reset"
+        Write-Host "     $csColor[$(Get-ProgressBar $csRem 24)]$reset $bold${csRem}%$reset remaining$csResetStr"
+    }
+
+    Write-Host ""
+    # === SECTION 2: OPENAI CODEX ===
+    Write-Host "  $cyan$bold[2] OpenAI Codex$reset"
+    if ($codex.Error) {
+        Write-Host "     $red Error: $($codex.Error)$reset"
+    } else {
+        $cpRem = if ($codex.primary.remaining -ne $null) { $codex.primary.remaining } else { 0 }
+        $csRem = if ($codex.secondary.remaining -ne $null) { $codex.secondary.remaining } else { 0 }
+        $cpColor = if ($cpRem -ge 50) { $green } elseif ($cpRem -ge 20) { $yellow } else { $red }
+        $csColor = if ($csRem -ge 50) { $green } elseif ($csRem -ge 20) { $yellow } else { $red }
+
+        Write-Host "     $dim Account: $($codex.email) ($($codex.plan.ToUpper()) plan) | Credits: $($codex.credits) reset credits$reset"
+        $codexCtx = Get-AgentContext "codex"
+        if ($codexCtx) {
+            Write-Host "     $bold Active Session Context:$reset $bold$($codexCtx.detailed)$reset"
+            Write-Host ""
+        }
+
+        Write-Host "     $bold 5-Hour Session Limit:$reset"
+        Write-Host "     $cpColor[$(Get-ProgressBar $cpRem 24)]$reset $bold${cpRem}%$reset remaining (resets in $($codex.primary.reset_text))"
+        Write-Host "     $bold 7-Day Weekly Limit:$reset"
+        Write-Host "     $csColor[$(Get-ProgressBar $csRem 24)]$reset $bold${csRem}%$reset remaining (resets in $($codex.secondary.reset_text))"
+    }
+
+    Write-Host ""
+    # === SECTION 3: ANTIGRAVITY (AGY) ===
+    Write-Host "  $magenta$bold[3] Google Antigravity (Agy)$reset"
     if ($agy.Error) {
         Write-Host "     $red Error: $($agy.Error)$reset"
     } else {
@@ -619,29 +855,7 @@ if ($Dashboard) {
     }
 
     Write-Host ""
-    # === SECTION 2: OPENAI CODEX ===
-    Write-Host "  $blue$bold[2] OpenAI Codex$reset"
-    if ($codex.Error) {
-        Write-Host "     $red Error: $($codex.Error)$reset"
-    } else {
-        $cpColor = if ($codex.primary.remaining -ge 50) { $green } elseif ($codex.primary.remaining -ge 20) { $yellow } else { $red }
-        $csColor = if ($codex.secondary.remaining -ge 50) { $green } elseif ($codex.secondary.remaining -ge 20) { $yellow } else { $red }
-
-        Write-Host "     $dim Account: $($codex.email) ($($codex.plan.ToUpper()) plan) | Credits: $($codex.credits) reset credits$reset"
-        $codexCtx = Get-AgentContext "codex"
-        if ($codexCtx) {
-            Write-Host "     $bold Active Session Context:$reset $bold$($codexCtx.detailed)$reset"
-            Write-Host ""
-        }
-
-        Write-Host "     $bold 5-Hour Session Limit:$reset"
-        Write-Host "     $cpColor[$(Get-ProgressBar $codex.primary.remaining 24)]$reset $bold$($codex.primary.remaining)%$reset remaining (resets in $($codex.primary.reset_text))"
-        Write-Host "     $bold 7-Day Weekly Limit:$reset"
-        Write-Host "     $csColor[$(Get-ProgressBar $codex.secondary.remaining 24)]$reset $bold$($codex.secondary.remaining)%$reset remaining (resets in $($codex.secondary.reset_text))"
-    }
-
-    Write-Host ""
-    # === SECTION 3: HERDR PANES ===
+    # === SECTION 4: HERDR PANES ===
     $herdrPath = (Get-Command herdr.exe -ErrorAction SilentlyContinue).Source
     if ($herdrPath) {
         $panesJson = & $herdrPath pane list 2>$null
@@ -688,6 +902,28 @@ if ($Context) {
     Write-Host "$cyan$bold==> CodexBar: AI Context & Token Monitor$reset"
     Write-Host ""
 
+    $claudeCtx = Get-AgentContext "claude"
+    Write-Host "$blue$bold[Anthropic Claude (Claude Code)]$reset"
+    if ($claudeCtx) {
+        Write-Host "  Session Context:   $bold$($claudeCtx.detailed)$reset"
+        Write-Host "  Estimated Tokens:  $($claudeCtx.raw_tokens)"
+    } else {
+        Write-Host "  No active Claude session found."
+    }
+    Write-Host ""
+
+    $codexCtx = Get-AgentContext "codex"
+    Write-Host "$cyan$bold[OpenAI Codex]$reset"
+    if ($codexCtx) {
+        Write-Host "  Session Context:   $bold$($codexCtx.detailed)$reset"
+        if ($codexCtx.pct -ne $null) {
+            Write-Host "  Context Used:      $($codexCtx.pct)%"
+        }
+    } else {
+        Write-Host "  No active Codex session found."
+    }
+    Write-Host ""
+
     $agyCtx = Get-AgentContext "agy"
     Write-Host "$magenta$bold[Antigravity / Agy]$reset"
     if ($agyCtx) {
@@ -696,18 +932,6 @@ if ($Context) {
         Write-Host "  Transcript Size:   $($agyCtx.size_str) ($($agyCtx.raw_bytes) bytes)"
     } else {
         Write-Host "  No active Agy session found."
-    }
-    Write-Host ""
-
-    $codexCtx = Get-AgentContext "codex"
-    Write-Host "$blue$bold[OpenAI Codex]$reset"
-    if ($codexCtx) {
-        Write-Host "  Session Context:   $bold$($codexCtx.detailed)$reset"
-        if ($codexCtx.pct -ne $null) {
-            Write-Host "  Context Used:      $($codexCtx.pct)%"
-        }
-    } else {
-        Write-Host "  No active Codex session found."
     }
     exit 0
 }
@@ -724,13 +948,68 @@ $dim = "$esc[2m"
 $magenta = "$esc[35m"
 $blue = "$esc[34m"
 
-$showAgy = ($Target -notmatch '^(codex|openai)$')
-$showCodex = ($Target -notmatch '^(agy|antigravity)$')
+$showClaude = ($Target -eq "" -or $Target -match '^(claude|anthropic)$')
+$showCodex = ($Target -eq "" -or $Target -match '^(codex|openai)$')
+$showAgy = ($Target -eq "" -or $Target -match '^(agy|antigravity|gemini)$')
 
 Write-Host "$cyan$bold==> CodexBar: AI Usage & Quota Monitor$reset"
 Write-Host ""
 
+$sectionsShown = 0
+
+if ($showClaude) {
+    if ($sectionsShown -gt 0) { Write-Host "" }
+    Write-Host "$blue$bold[Anthropic Claude (Claude Code)]$reset"
+    if ($claude.Error) {
+        Write-Host "  Error: $($claude.Error)"
+    } else {
+        $cpRem = if ($claude.primary.remaining -ne $null) { $claude.primary.remaining } else { 0 }
+        $csRem = if ($claude.secondary.remaining -ne $null) { $claude.secondary.remaining } else { 0 }
+        $cpColor = if ($cpRem -ge 50) { $green } elseif ($cpRem -ge 20) { $yellow } else { $red }
+        $csColor = if ($csRem -ge 50) { $green } elseif ($csRem -ge 20) { $yellow } else { $red }
+
+        $infoParts = @()
+        if ($claude.email) { $infoParts += "Account: $($claude.email)" }
+        if ($claude.plan) { $infoParts += "($($claude.plan.ToUpper()) plan)" }
+        if ($claude.org) { $infoParts += "Org: $($claude.org)" }
+        if ($infoParts.Count -gt 0) {
+            Write-Host "  $dim$($infoParts -join ' ')$reset"
+        }
+
+        $claudeCtx = Get-AgentContext "claude"
+        if ($claudeCtx) {
+            Write-Host "  Session Context:   $bold$($claudeCtx.detailed)$reset"
+        }
+        $cpResetStr = if ($claude.primary.reset_text) { " (resets in $($claude.primary.reset_text))" } else { "" }
+        $csResetStr = if ($claude.secondary.reset_text) { " (resets in $($claude.secondary.reset_text))" } else { "" }
+        Write-Host "  Session 5h:        $cpColor${cpRem}%$reset$cpResetStr"
+        Write-Host "  Weekly 7d:         $csColor${csRem}%$reset$csResetStr"
+    }
+    $sectionsShown++
+}
+
+if ($showCodex) {
+    if ($sectionsShown -gt 0) { Write-Host "" }
+    Write-Host "$cyan$bold[OpenAI Codex]$reset"
+    if ($codex.Error) {
+        Write-Host "  Error: $($codex.Error)"
+    } else {
+        $cpColor = if ($codex.primary.remaining -ge 50) { $green } elseif ($codex.primary.remaining -ge 20) { $yellow } else { $red }
+        $csColor = if ($codex.secondary.remaining -ge 50) { $green } elseif ($codex.secondary.remaining -ge 20) { $yellow } else { $red }
+
+        Write-Host "  $dim Account: $($codex.email) ($($codex.plan.ToUpper())) | Credits: $($codex.credits)$reset"
+        $codexCtx = Get-AgentContext "codex"
+        if ($codexCtx) {
+            Write-Host "  Session Context:   $bold$($codexCtx.detailed)$reset"
+        }
+        Write-Host "  Session 5h:        $cpColor$($codex.primary.remaining)%$reset (resets in $($codex.primary.reset_text))"
+        Write-Host "  Weekly 7d:         $csColor$($codex.secondary.remaining)%$reset (resets in $($codex.secondary.reset_text))"
+    }
+    $sectionsShown++
+}
+
 if ($showAgy) {
+    if ($sectionsShown -gt 0) { Write-Host "" }
     Write-Host "$magenta$bold[Antigravity / Agy]$reset"
     if ($agy.Error) {
         Write-Host "  Error: $($agy.Error)"
@@ -751,26 +1030,5 @@ if ($showAgy) {
         Write-Host "  Gemini Models:     5h $gColor${g5h}%$reset (resets in $($g5hB.reset_text)) | Weekly: ${gWk}%"
         Write-Host "  Claude/GPT Models: 5h $tpColor${tp5h}%$reset (resets in $($tp5hB.reset_text)) | Weekly: ${tpWk}%"
     }
-}
-
-if ($showAgy -and $showCodex) {
-    Write-Host ""
-}
-
-if ($showCodex) {
-    Write-Host "$blue$bold[OpenAI Codex]$reset"
-    if ($codex.Error) {
-        Write-Host "  Error: $($codex.Error)"
-    } else {
-        $cpColor = if ($codex.primary.remaining -ge 50) { $green } elseif ($codex.primary.remaining -ge 20) { $yellow } else { $red }
-        $csColor = if ($codex.secondary.remaining -ge 50) { $green } elseif ($codex.secondary.remaining -ge 20) { $yellow } else { $red }
-
-        Write-Host "  Account: $($codex.email) ($($codex.plan.ToUpper())) | Credits: $($codex.credits)"
-        $codexCtx = Get-AgentContext "codex"
-        if ($codexCtx) {
-            Write-Host "  Session Context:   $bold$($codexCtx.detailed)$reset"
-        }
-        Write-Host "  Session 5h: $cpColor$($codex.primary.remaining)%$reset (resets in $($codex.primary.reset_text))"
-        Write-Host "  Weekly 7d:  $csColor$($codex.secondary.remaining)%$reset (resets in $($codex.secondary.reset_text))"
-    }
+    $sectionsShown++
 }
